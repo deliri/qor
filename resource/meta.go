@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/jinzhu/gorm"
-	"github.com/jinzhu/now"
 	"github.com/qor/qor"
 	"github.com/qor/qor/utils"
 	"github.com/qor/roles"
+	"github.com/qor/validations"
 )
 
 // Metaor interface
@@ -264,8 +264,17 @@ func (meta *Meta) Initialize() error {
 					return
 				}
 
-				value := metaValue.Value
-				fieldName := meta.FieldName
+				var (
+					value     = metaValue.Value
+					fieldName = meta.FieldName
+				)
+
+				defer func() {
+					if r := recover(); r != nil {
+						context.AddError(validations.NewError(resource, meta.Name, fmt.Sprintf("Can't set value %v", value)))
+					}
+				}()
+
 				if nestedField {
 					fields := strings.Split(fieldName, ".")
 					fieldName = fields[len(fields)-1]
@@ -273,7 +282,7 @@ func (meta *Meta) Initialize() error {
 
 				field := reflect.Indirect(reflect.ValueOf(resource)).FieldByName(fieldName)
 				if field.Kind() == reflect.Ptr {
-					if field.IsNil() {
+					if field.IsNil() && utils.ToString(value) != "" {
 						field.Set(utils.NewValue(field.Type()).Elem())
 					}
 
@@ -299,6 +308,11 @@ func (meta *Meta) Initialize() error {
 						}
 					default:
 						if scanner, ok := field.Addr().Interface().(sql.Scanner); ok {
+							if value == nil && len(metaValue.MetaValues.Values) > 0 {
+								decodeMetaValuesToField(meta.Resource, field, metaValue, context)
+								return
+							}
+
 							if scanner.Scan(value) != nil {
 								scanner.Scan(utils.ToString(value))
 							}
@@ -310,7 +324,7 @@ func (meta *Meta) Initialize() error {
 							field.Set(rvalue.Convert(field.Type()))
 						} else if _, ok := field.Addr().Interface().(*time.Time); ok {
 							if str := utils.ToString(value); str != "" {
-								if newTime, err := now.Parse(str); err == nil {
+								if newTime, err := utils.ParseTime(str, context); err == nil {
 									field.Set(reflect.ValueOf(newTime))
 								}
 							}
